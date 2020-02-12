@@ -32,11 +32,8 @@ func NewMonitor() *Monitor {
 }
 
 func parseDomain(host string) (domain string) {
-	domain = ""
-
 	r, _ := regexp.Compile("[\\.\\-A-Za-z0-9]*")
 	domain = r.FindString(host)
-
 	return
 }
 
@@ -59,7 +56,7 @@ func X509ToJSON(cert *x509.Certificate) string {
 
 // GetCertificates is return the full certificate chain from tls connection
 func (mon *Monitor) GetCertificates(host string, sni string) []*x509.Certificate {
-	if len(sni) < 1 {
+	if len(sni) == 0 {
 		sni = parseDomain(host)
 	}
 
@@ -73,6 +70,7 @@ func (mon *Monitor) GetCertificates(host string, sni string) []*x509.Certificate
 		ServerName:         sni,
 	})
 	defer tcpConn.Close()
+
 	if tlsConn == nil {
 		log.Println("Can not create TLS client: ", err)
 		return nil
@@ -83,6 +81,7 @@ func (mon *Monitor) GetCertificates(host string, sni string) []*x509.Certificate
 		log.Println("Failed to handshake: ", err)
 		return nil
 	}
+
 	state := tlsConn.ConnectionState()
 
 	return state.PeerCertificates

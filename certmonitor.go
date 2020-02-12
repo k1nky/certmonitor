@@ -7,6 +7,8 @@ import (
 	"log"
 	"net/http"
 	"regexp"
+	"strconv"
+	"time"
 )
 
 var (
@@ -31,7 +33,8 @@ func getSingleQueryParam(r *http.Request, name string) string {
 		return params[0]
 	}
 
-	if param := r.Form.Get(name); len(param) > 1 {
+	r.ParseForm()
+	if param := r.FormValue(name); len(param) > 1 {
 		return param
 	}
 	return ""
@@ -80,16 +83,14 @@ func main() {
 	flag.Parse()
 
 	log.Println("ListenAndServe: ", listen)
-	err := http.ListenAndServe(listen, nil)
-	if err != nil {
+
+	if err := http.ListenAndServe(listen, nil); err != nil {
 		log.Fatalln("ListenAndServe:", err)
 	}
 
-	/*
-		certmon.Timeout, err = strconv.Atoi(timeout)
-		if err != nil {
-			log.Printf("Set invalid timeout value - %s, will be used: 10", timeout)
-			certmon.Timeout = time.Duration(10)
-		}
-	*/
+	if value, err := strconv.Atoi(timeout); err == nil {
+		log.Printf("Set timeout value - %s", timeout)
+		certmon.Timeout = time.Duration(value)
+	}
+
 }
