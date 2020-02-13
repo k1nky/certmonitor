@@ -34,7 +34,7 @@ func getSingleQueryParam(r *http.Request, name string) string {
 	}
 
 	r.ParseForm()
-	if param := r.FormValue(name); len(param) > 1 {
+	if param := r.Form.Get(name); len(param) > 1 {
 		return param
 	}
 	return ""
@@ -42,7 +42,6 @@ func getSingleQueryParam(r *http.Request, name string) string {
 
 func onSSL(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet || r.Method == http.MethodPost {
-		var resp string = ""
 
 		host := getSingleQueryParam(r, "host")
 		if len(host) < 1 || !validateParamHost.MatchString(host) {
@@ -54,18 +53,9 @@ func onSSL(w http.ResponseWriter, r *http.Request) {
 		if len(sni) < 1 || !validateParamSNI.MatchString(sni) {
 			sni = ""
 		}
-		chain := getSingleQueryParam(r, "chain")
-		certs := certmon.GetCertificates(host, sni)
-		if len(certs) > 0 {
-			if len(chain) > 0 {
-				for _, v := range certs {
-					resp = resp + "\n" + monitor.X509ToJSON(v)
-				}
-			} else {
-				resp = monitor.X509ToJSON(certs[0])
-			}
-		}
-		fmt.Fprintf(w, resp)
+		state := monitor.NewState(host, sni)
+		certmon.UpdateState(state)
+		fmt.Fprintf(w, state.ToJSON())
 	} else {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
@@ -83,14 +73,13 @@ func main() {
 	flag.Parse()
 
 	log.Println("ListenAndServe: ", listen)
-
-	if err := http.ListenAndServe(listen, nil); err != nil {
+	err := http.ListenAndServe(listen, nil)
+	if err != nil {
 		log.Fatalln("ListenAndServe:", err)
 	}
 
-	if value, err := strconv.Atoi(timeout); err == nil {
-		log.Printf("Set timeout value - %s", timeout)
+	if value, err := strconv.Atoi(timeout); err != nil {
+		log.Printf("Set custom timeout value - %d", value)
 		certmon.Timeout = time.Duration(value)
 	}
-
 }
