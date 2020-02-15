@@ -1,6 +1,7 @@
 package monitor
 
 import (
+	"crypto/sha1"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
@@ -8,6 +9,8 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"os"
+	"path"
 	"regexp"
 	"time"
 )
@@ -18,7 +21,8 @@ const (
 
 // Monitor is Monitor :)
 type Monitor struct {
-	Timeout time.Duration
+	Ctx *Context
+	DB  DBWrapper
 }
 
 type State struct {
@@ -39,11 +43,24 @@ type JSONCertificate struct {
 	Expired    int64     `json:"expired"`
 }
 
-// NewMonitor is constructor of new instance Monitor
 func NewMonitor() *Monitor {
-	return &Monitor{
-		Timeout: time.Second * 10,
+	return &Monitor{}
+}
+
+func (mon *Monitor) LoadConfig(filename string) error {
+	ctx, err := loadConfig(filename)
+	mon.Ctx = ctx
+	return err
+}
+
+func (mon *Monitor) Run() {
+	if err := os.MkdirAll(mon.Ctx.Data, os.ModePerm); err != nil {
+		log.Fatalln(err)
 	}
+	if err := mon.NewDBWrapper(path.Join(mon.Ctx.Data, "local.db")); err != nil {
+		log.Fatalln(err)
+	}
+	//mon.FetchDNS()
 }
 
 func NewState(host string, sni string) *State {
@@ -85,12 +102,25 @@ func CheckCertificate(cert *x509.Certificate, hostname string) error {
 	return cert.VerifyHostname(hostname)
 }
 
+func fingerprint(data []byte) string {
+	return fmt.Sprintf("% x", sha1.Sum(data))
+}
+
 func (mon Monitor) UpdateState(st *State) {
 	certs := mon.GetCertificates(st.Host, st.SNI)
 	if certs == nil {
 		return
 	}
 	for _, cert := range certs {
+		row := DBCertRow{
+			CommonName:        cert.Subject.CommonName,
+			NotAfter:          cert.NotAfter,
+			NotBefore:         cert.NotBefore,
+			Domains:           cert.DNSNames,
+			Fingerprint:       fingerprint(cert.Raw),
+			IssuerFingerprint: fingerprint(cert.RawIssuer),
+		}
+		mon.DB.InsertCert(row)
 		st.Certificates = append(st.Certificates, JSONCertificate{
 			CommonName: cert.Subject.CommonName,
 			Issuer:     cert.Issuer.CommonName,
@@ -113,7 +143,8 @@ func (mon Monitor) UpdateState(st *State) {
 // GetCertificates is return the full certificate chain from tls connection
 func (mon Monitor) GetCertificates(host string, sni string) []*x509.Certificate {
 
-	tcpConn, err := net.DialTimeout("tcp", host, mon.Timeout)
+	timeout := time.Duration(mon.Ctx.TLSTimeout) * time.Second
+	tcpConn, err := net.DialTimeout("tcp", host, timeout)
 	if err != nil {
 		log.Println("Failed to establish TCP connection: ", err)
 		return nil
@@ -128,7 +159,7 @@ func (mon Monitor) GetCertificates(host string, sni string) []*x509.Certificate 
 		return nil
 	}
 	defer tlsConn.Close()
-	tlsConn.SetDeadline(time.Now().Add(mon.Timeout))
+	tlsConn.SetDeadline(time.Now().Add(timeout))
 	if err := tlsConn.Handshake(); err != nil {
 		log.Println("Failed to handshake: ", err)
 		return nil

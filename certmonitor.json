@@ -1,0 +1,13 @@
+{
+    "listen": "0.0.0.0:8000",
+    "tlsTimeout": 10,
+    "data": "./data",
+    "retransferDelay": 10,
+    "zones": [
+        {
+            "name": "yandex.ru.",
+            "master": "172.24.0.1:53",
+            "proto": "udp"
+        }
+    ]
+}

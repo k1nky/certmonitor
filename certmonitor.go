@@ -7,8 +7,6 @@ import (
 	"log"
 	"net/http"
 	"regexp"
-	"strconv"
-	"time"
 )
 
 var (
@@ -64,22 +62,20 @@ func onSSL(w http.ResponseWriter, r *http.Request) {
 func main() {
 
 	var (
-		listen  string
-		timeout string
+		filename string
 	)
 
-	flag.StringVar(&listen, "l", "0.0.0.0:8000", "Specify listen address. Default is 0.0.0.0:8000")
-	flag.StringVar(&timeout, "t", "10", "Specify connection timeout. Default is 10")
+	flag.StringVar(&filename, "f", "certmonitor.json", "Specify configuration file. Default is certmon.json")
 	flag.Parse()
 
-	log.Println("ListenAndServe: ", listen)
-	err := http.ListenAndServe(listen, nil)
-	if err != nil {
-		log.Fatalln("ListenAndServe:", err)
+	if err := certmon.LoadConfig(filename); err != nil {
+		return
 	}
 
-	if value, err := strconv.Atoi(timeout); err != nil {
-		log.Printf("Set custom timeout value - %d", value)
-		certmon.Timeout = time.Duration(value)
+	certmon.Run()
+	log.Println("ListenAndServe: ", certmon.Ctx.Listen)
+	err := http.ListenAndServe(certmon.Ctx.Listen, nil)
+	if err != nil {
+		log.Fatalln("ListenAndServe:", err)
 	}
 }
