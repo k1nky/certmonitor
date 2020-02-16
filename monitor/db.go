@@ -11,10 +11,10 @@ import (
 )
 
 type DBStateRow struct {
-	ID          int64
+	ID          int
 	Host        string    `json:"host"`
 	SNI         string    `json:"sni"`
-	Valid       bool      `json:"valid"`
+	Valid       int       `json:"valid"`
 	Description string    `json:"description"`
 	TS          time.Time `json:"ts"`
 }
@@ -31,22 +31,64 @@ type DBCertRow struct {
 }
 
 type DBWrapper interface {
+	GetStateIDByHost(host string, sni string) (id int)
+	GetStates() []DBStateRow
 	InitDB() error
 	InsertCert(cert DBCertRow) error
-	insertStateCert(tx *sql.Tx, stateID int, fingerprint string) error
-	deleteStateCerts(tx *sql.Tx, stateID int) error
-	updateState(tx *sql.Tx, state *DBStateRow) error
+	InsertState(state DBStateRow) error
 	UpdateState(state *DBStateRow, certs []DBCertRow) error
-	GetStateIDByHost(host string, sni string) (id int)
+	RunWriter()
+	SingleWrite(sql string) (ch chan error)
+}
+
+type DBWriteTask struct {
+	Out chan error
+	SQL string
 }
 
 type dbwrapper struct {
 	*sql.DB
+	Writer chan DBWriteTask
 }
 
 var (
 	UnexpectedState = errors.New("Unexpected state")
 )
+
+func (dbw *dbwrapper) RunWriter() {
+	go func() {
+		for {
+			select {
+			case task := <-dbw.Writer:
+				tx, err := dbw.Begin()
+				if err != nil {
+					log.Println(err)
+					task.Out <- err
+					continue
+				}
+				if _, err := tx.Exec(task.SQL); err != nil {
+					log.Println(err)
+					task.Out <- err
+					tx.Rollback()
+					continue
+				}
+				tx.Commit()
+				task.Out <- nil
+			}
+		}
+	}()
+}
+
+func (dbw *dbwrapper) SingleWrite(sql string) (ch chan error) {
+	ch = make(chan error)
+
+	dbw.Writer <- DBWriteTask{
+		Out: ch,
+		SQL: sql,
+	}
+
+	return ch
+}
 
 func (mon *Monitor) NewDBWrapper(filename string) (err error) {
 	var (
@@ -57,8 +99,12 @@ func (mon *Monitor) NewDBWrapper(filename string) (err error) {
 		log.Println(err)
 		return err
 	}
-	mon.DB = &dbwrapper{db}
+	mon.DB = &dbwrapper{
+		db,
+		make(chan DBWriteTask),
+	}
 
+	mon.DB.RunWriter()
 	if err := mon.DB.InitDB(); err != nil {
 		return err
 	}
@@ -67,49 +113,38 @@ func (mon *Monitor) NewDBWrapper(filename string) (err error) {
 
 func (dbw *dbwrapper) InitDB() error {
 	sql := `
+	PRAGMA journal_mode=WAL;
 	CREATE TABLE IF NOT EXISTS states(
-		id interger not null primary key,
+		id integer not null primary key,
 		host text not null,
 		sni text,
-		ts timestamp,
-		valid interger,
-		description text
+		ts timestamp DEFAULT NULL,
+		valid integer DEFAULT 1,
+		description text DEFAULT ''
 		);
 	CREATE UNIQUE INDEX IF NOT EXISTS states_dx
 		ON states (host, sni);
+	CREATE TABLE IF NOT EXISTS certs(
+		id integer not null primary key,
+		fingerprint text not null,
+		issuer_fingerprint text,
+		common_name text,
+		domains text,
+		not_after timestamp,
+		not_before timestamp			
+	);
+	CREATE UNIQUE INDEX IF NOT EXISTS certs_dx
+		ON certs (fingerprint);
+	CREATE TABLE IF NOT EXISTS state_certs(
+		id integer not null primary key,
+		state_id integer,
+		fingerprint text
+	);
 	`
-	if _, err := dbw.Exec(sql); err != nil {
-		return err
+	_, err := dbw.Exec(sql)
+	if err != nil {
+		log.Println(err)
 	}
-
-	sql = `
-		CREATE TABLE IF NOT EXISTS certs(
-			id integer not null primary key,
-			fingerprint text not null,
-			issuer_fingerprint text,
-			common_name text,
-			domains text,
-			not_after timestamp,
-			not_before timestamp			
-		);
-		CREATE UNIQUE INDEX IF NOT EXISTS certs_dx
-			ON certs (fingerprint);
-	`
-
-	if _, err := dbw.Exec(sql); err != nil {
-		return err
-	}
-	sql = `
-		CREATE TABLE IF NOT EXISTS state_certs(
-			id integer not null primary key,
-			state_id integer,
-			fingerprint text
-		);
-	`
-	if _, err := dbw.Exec(sql); err != nil {
-		return err
-	}
-
 	return nil
 }
 
@@ -122,111 +157,92 @@ func (dbw *dbwrapper) InsertCert(cert DBCertRow) error {
 		) 
 		SELECT '%s', '%s', '%s', '%s', '%s', '%s'
 		WHERE  NOT EXISTS (SELECT 1 FROM certs WHERE fingerprint = '%s');
-		`, cert.Fingerprint, cert.IssuerFingerprint, cert.CommonName, cert.Domains, cert.NotAfter, cert.NotBefore,
-		cert.Fingerprint)
-	if _, err := dbw.Exec(sql); err != nil {
-		log.Println(err)
-		return err
-	}
-	return nil
+	`, cert.Fingerprint, cert.IssuerFingerprint, cert.CommonName,
+		cert.Domains, cert.NotAfter, cert.NotBefore, cert.Fingerprint)
+
+	ch := dbw.SingleWrite(sql)
+
+	return <-ch
 }
 
-func (dbw *dbwrapper) updateState(tx *sql.Tx, state *DBStateRow) error {
+func (dbw *dbwrapper) InsertState(state DBStateRow) error {
 
-	stmt, err := tx.Prepare(`
-		REPLACE INTO states(host, sni, valid, description, ts)
-		VALUES (?, ?, ?, ?, ?);
-	`)
-	if err != nil {
-		log.Println(err)
-		return err
-	}
-	defer stmt.Close()
+	sql := fmt.Sprintf(`
+		INSERT OR IGNORE INTO states(
+			host, sni
+		) VALUES ('%s', '%s')
+		`, state.Host, state.SNI)
 
-	state.TS = time.Now()
-	if _, err := stmt.Exec(state.Host, state.SNI, state.Valid, state.Description, state.TS); err != nil {
-		log.Println(err)
-		return err
-	}
-	return nil
+	ch := dbw.SingleWrite(sql)
+
+	return <-ch
 }
 
 func (dbw *dbwrapper) GetStateIDByHost(host string, sni string) (id int) {
 	sql := fmt.Sprintf(`
-		SELECT id FROM state WHERE host='%s' and sni='%s'
+		SELECT id FROM states WHERE host='%s' and sni='%s'
 	`, host, sni)
 	rows := dbw.QueryRow(sql)
 	if err := rows.Scan(&id); err != nil {
+		log.Println(err)
 		return 0
 	}
 	return
 }
 
-func (dbw *dbwrapper) deleteStateCerts(tx *sql.Tx, stateID int) error {
-	stmt, err := tx.Prepare(`DELETE FROM state_certs WHERE state_id=%d`)
+func (dbw *dbwrapper) GetStates() []DBStateRow {
+	var (
+		host string
+		sni  string
+		id   int
+	)
+	states := make([]DBStateRow, 0, 1)
+	sql := fmt.Sprintf(`SELECT id, host, sni FROM states`)
+	rows, err := dbw.Query(sql)
 	if err != nil {
 		log.Println(err)
-		return err
+		return states
 	}
-	defer stmt.Close()
-
-	if _, err := stmt.Exec(stateID); err != nil {
-		log.Println(err)
-		return err
+	defer rows.Close()
+	for rows.Next() {
+		if err := rows.Scan(&id, &host, &sni); err != nil {
+			log.Println(err)
+			break
+		}
+		states = append(states, DBStateRow{
+			ID:   id,
+			Host: host,
+			SNI:  sni,
+		})
 	}
-	return nil
-}
-
-func (dbw *dbwrapper) insertStateCert(tx *sql.Tx, stateID int, fingerprint string) error {
-	stmt, err := tx.Prepare(`
-		INSERT INTO state_certs(state_id, fingerprint) 
-		VALUE (?, ?)
-	`)
-	if err != nil {
-		log.Println(err)
-		return err
-	}
-	defer stmt.Close()
-
-	if _, err := stmt.Exec(stateID, fingerprint); err != nil {
-		log.Println(err)
-		return err
-	}
-	return nil
-
+	return states
 }
 
 func (dbw *dbwrapper) UpdateState(state *DBStateRow, certs []DBCertRow) error {
-	tx, err := dbw.Begin()
-	if err != nil {
-		log.Println(err)
-		return err
-	}
-	if err := dbw.updateState(tx, state); err != nil {
-		tx.Rollback()
-		return nil
-	}
-
-	stateID := dbw.GetStateIDByHost(state.Host, state.SNI)
-	if stateID == 0 {
-		tx.Rollback()
-		log.Println("Unexpected state")
-		return UnexpectedState
-	}
-
-	if err := dbw.deleteStateCerts(tx, stateID); err != nil {
-		tx.Rollback()
-		return err
-	}
 	for _, cert := range certs {
 		if err := dbw.InsertCert(cert); err != nil {
 			return nil
 		}
-		if err := dbw.insertStateCert(tx, stateID, cert.Fingerprint); err != nil {
-			return nil
-		}
 	}
-	tx.Commit()
+	state.TS = time.Now()
+	sql := fmt.Sprintf(`
+			UPDATE states SET valid=%d, description='%s', ts='%s'
+			WHERE host='%s' AND sni='%s';
+		`, state.Valid, state.Description, state.TS, state.Host, state.SNI)
 
-	return nil
+	sql = sql + fmt.Sprintf(`
+		DELETE FROM state_certs WHERE EXISTS (
+			SELECT 1 FROM states WHERE state_certs.state_id=states.id AND host='%s' AND sni='%s'
+			);
+	`, state.Host, state.SNI)
+
+	for _, cert := range certs {
+		sql = sql + fmt.Sprintf(`
+			INSERT INTO state_certs(state_id, fingerprint) 
+			SELECT id, '%s' FROM states WHERE host='%s' AND sni='%s';
+		`, cert.Fingerprint, state.Host, state.SNI)
+	}
+	ch := dbw.SingleWrite(sql)
+
+	return <-ch
 }

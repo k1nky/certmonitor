@@ -3,7 +3,6 @@ package main
 import (
 	"certmonitor/monitor"
 	"flag"
-	"fmt"
 	"log"
 	"net/http"
 	"regexp"
@@ -51,9 +50,11 @@ func onSSL(w http.ResponseWriter, r *http.Request) {
 		if len(sni) < 1 || !validateParamSNI.MatchString(sni) {
 			sni = ""
 		}
-		state := monitor.NewState(host, sni)
-		certmon.UpdateState(state)
-		fmt.Fprintf(w, state.ToJSON())
+		/*
+			state := monitor.NewState(host, sni)
+			certmon.UpdateState(state)
+			fmt.Fprintf(w, state.ToJSON())
+		*/
 	} else {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}

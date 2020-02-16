@@ -1,7 +1,6 @@
 package monitor
 
 import (
-	"fmt"
 	"log"
 	"time"
 
@@ -19,7 +18,23 @@ func (m Monitor) FetchDNS() {
 				for _, zone := range m.Ctx.Zones {
 					records := getZone(zone)
 					for _, v := range records {
-						fmt.Println(v.String())
+						hdr := v.Header()
+						name := hdr.Name[:len(hdr.Name)-1]
+						state := DBStateRow{
+							Host: name,
+							SNI:  name,
+						}
+						if hdr.Rrtype == dns.TypeA {
+							state.Host = state.Host + ":443"
+						} else if hdr.Rrtype == dns.TypeMX {
+							mx := v.(*dns.MX)
+							name = mx.Mx[:len(mx.Mx)-1]
+							state.Host = name + ":465"
+							state.SNI = name
+						} else {
+							continue
+						}
+						m.DB.InsertState(state)
 					}
 				}
 			}
