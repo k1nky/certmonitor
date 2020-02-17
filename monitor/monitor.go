@@ -1,21 +1,12 @@
 package monitor
 
 import (
-	"crypto/sha1"
-	"crypto/tls"
-	"crypto/x509"
-	"errors"
-	"fmt"
 	"log"
-	"net"
 	"os"
 	"path"
 	"regexp"
+	"strings"
 	"time"
-)
-
-const (
-	StateNoData = "\n"
 )
 
 // Monitor is Monitor :)
@@ -45,32 +36,41 @@ func (mon *Monitor) Run() {
 	mon.RunWatcher()
 }
 
+func (mon *Monitor) worker(jobs <-chan DBStateRow) {
+	for state := range jobs {
+		mon.UpdateState(&state)
+		mon.DB.UpdateState(&state)
+	}
+}
+
 func (mon *Monitor) RunWatcher() {
+	delay := time.Second * time.Duration(mon.Ctx.WatcherDelay)
 	go func() {
+		jobs := make(chan DBStateRow)
+		for i := 0; i < mon.Ctx.MaxThreads; i++ {
+			go mon.worker(jobs)
+		}
 		for {
-			time.Sleep(10 * time.Second)
 			states := mon.DB.GetStates()
 			for _, state := range states {
-				mon.UpdateState(&state)
+				jobs <- state
 			}
+			time.Sleep(delay)
 		}
 	}()
 }
 
-/*
-func NewState(host string, sni string) *State {
+func NewState(host string, sni string) *DBStateRow {
 	if len(sni) == 0 {
 		sni = parseDomain(host)
 	}
-	return &State{
+	return &DBStateRow{
 		Host:         host,
 		SNI:          sni,
-		Certificates: make([]JSONCertificate, 0, 1),
-		Valid:        true,
-		Description:  "",
+		Certificates: nil,
+		Valid:        UnknownState,
 	}
 }
-*/
 
 func parseDomain(host string) (domain string) {
 	r, _ := regexp.Compile("[\\.\\-A-Za-z0-9]*")
@@ -79,86 +79,31 @@ func parseDomain(host string) (domain string) {
 	return
 }
 
-/*
-func (st State) ToJSON() string {
-	j, err := json.Marshal(st)
-	if err != nil {
-		return StateNoData
-	}
-	return string(j)
-}
-*/
-
-func CheckCertificate(cert *x509.Certificate, hostname string) error {
-	if time.Now().After(cert.NotAfter) || time.Now().Before(cert.NotBefore) {
-		msg := fmt.Sprintf("Certificate %s is expired or not actived yet", cert.Subject.CommonName)
-		return errors.New(msg)
-	}
-	if len(hostname) == 0 {
-		return nil
-	}
-	return cert.VerifyHostname(hostname)
-}
-
-func fingerprint(data []byte) string {
-	return fmt.Sprintf("% x", sha1.Sum(data))
-}
-
 func (mon Monitor) UpdateState(st *DBStateRow) {
 	certs := mon.GetCertificates(st.Host, st.SNI)
-	dbcerts := make([]DBCertRow, 0, 1)
-	st.Valid = 1
+	st.Certificates = make([]DBCertRow, 0, 1)
+	st.Valid = ValidState
 	if certs == nil {
-		st.Valid = -1
-		mon.DB.UpdateState(st, nil)
+		st.Valid = UnknownState
 		return
 	}
 	for _, cert := range certs {
-		dbcerts = append(dbcerts, DBCertRow{
-			CommonName:        cert.Subject.CommonName,
+		st.Certificates = append(st.Certificates, DBCertRow{
+			CommonName:        strings.ReplaceAll(cert.Subject.CommonName, "'", "''"),
 			NotAfter:          cert.NotAfter,
 			NotBefore:         cert.NotBefore,
 			Domains:           cert.DNSNames,
 			Fingerprint:       fingerprint(cert.Raw),
 			IssuerFingerprint: fingerprint(cert.RawIssuer),
+			Expired:           int(cert.NotAfter.Sub(time.Now()).Seconds()),
 		})
 		if err := CheckCertificate(cert, ""); err != nil {
-			st.Valid = 0
+			st.Valid = InvalidState
 			st.Description = err.Error() + "\n" + st.Description
 		}
 	}
 	if err := CheckCertificate(certs[0], st.SNI); err != nil {
-		st.Valid = 0
+		st.Valid = InvalidState
 		st.Description = err.Error() + "\n" + st.Description
 	}
-	mon.DB.UpdateState(st, dbcerts)
-}
-
-// GetCertificates is return the full certificate chain from tls connection
-func (mon Monitor) GetCertificates(host string, sni string) []*x509.Certificate {
-
-	timeout := time.Duration(mon.Ctx.TLSTimeout) * time.Second
-	tcpConn, err := net.DialTimeout("tcp", host, timeout)
-	if err != nil {
-		log.Println("Failed to establish TCP connection: ", err)
-		return nil
-	}
-	tlsConn := tls.Client(tcpConn, &tls.Config{
-		InsecureSkipVerify: true,
-		ServerName:         sni,
-	})
-	defer tcpConn.Close()
-	if tlsConn == nil {
-		log.Println("Can not create TLS client: ", err)
-		return nil
-	}
-	defer tlsConn.Close()
-	tlsConn.SetDeadline(time.Now().Add(timeout))
-	if err := tlsConn.Handshake(); err != nil {
-		log.Println("Failed to handshake: ", err)
-		return nil
-	}
-	state := tlsConn.ConnectionState()
-
-	return state.PeerCertificates
 }
