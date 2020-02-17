@@ -11,12 +11,13 @@ import (
 )
 
 type DBStateRow struct {
-	ID          int
-	Host        string    `json:"host"`
-	SNI         string    `json:"sni"`
-	Valid       int       `json:"valid"`
-	Description string    `json:"description"`
-	TS          time.Time `json:"ts"`
+	ID           int
+	Host         string    `json:"host"`
+	SNI          string    `json:"sni"`
+	Valid        int       `json:"valid"`
+	Description  string    `json:"description"`
+	TS           time.Time `json:"ts"`
+	Certificates []DBCertRow
 }
 
 type DBCertRow struct {
@@ -33,10 +34,12 @@ type DBCertRow struct {
 type DBWrapper interface {
 	GetStateIDByHost(host string, sni string) (id int)
 	GetStates() []DBStateRow
+	GetStatesByValid(valid int) []DBStateRow
+	GetCertificatesByExpire(expire int) []DBCertRow
 	InitDB() error
 	InsertCert(cert DBCertRow) error
 	InsertState(state DBStateRow) error
-	UpdateState(state *DBStateRow, certs []DBCertRow) error
+	UpdateState(state *DBStateRow) error
 	RunWriter()
 	SingleWrite(sql string) (ch chan error)
 }
@@ -51,9 +54,20 @@ type dbwrapper struct {
 	Writer chan DBWriteTask
 }
 
+const (
+	StateNoData  = "\n"
+	InvalidState = 0
+	ValidState   = 1
+	UnknownState = -1
+)
+
 var (
 	UnexpectedState = errors.New("Unexpected state")
 )
+
+func TimestampToSQLite(ts time.Time) string {
+	return ts.Format(time.RFC3339)
+}
 
 func (dbw *dbwrapper) RunWriter() {
 	go func() {
@@ -67,7 +81,7 @@ func (dbw *dbwrapper) RunWriter() {
 					continue
 				}
 				if _, err := tx.Exec(task.SQL); err != nil {
-					log.Println(err)
+					log.Println(err, task.SQL)
 					task.Out <- err
 					tx.Rollback()
 					continue
@@ -158,7 +172,7 @@ func (dbw *dbwrapper) InsertCert(cert DBCertRow) error {
 		SELECT '%s', '%s', '%s', '%s', '%s', '%s'
 		WHERE  NOT EXISTS (SELECT 1 FROM certs WHERE fingerprint = '%s');
 	`, cert.Fingerprint, cert.IssuerFingerprint, cert.CommonName,
-		cert.Domains, cert.NotAfter, cert.NotBefore, cert.Fingerprint)
+		cert.Domains, TimestampToSQLite(cert.NotAfter), TimestampToSQLite(cert.NotBefore), cert.Fingerprint)
 
 	ch := dbw.SingleWrite(sql)
 
@@ -190,12 +204,57 @@ func (dbw *dbwrapper) GetStateIDByHost(host string, sni string) (id int) {
 	return
 }
 
+func (dbw *dbwrapper) GetCertificatesByExpire(expired int) []DBCertRow {
+	var c DBCertRow
+	certs := make([]DBCertRow, 0, 1)
+	sql := fmt.Sprintf(`
+		SELECT 
+			fingerprint, common_name, not_after, not_before,
+			(strftime('%%s', not_after) - strftime('%%s', 'now')) / (24 * 3600) AS expired
+		FROM certs WHERE expired < %d
+	`, expired)
+	rows, err := dbw.Query(sql)
+	if err != nil {
+		log.Println(err)
+		return certs
+	}
+	defer rows.Close()
+	for rows.Next() {
+		if err := rows.Scan(&c.Fingerprint, &c.CommonName, &c.NotAfter, &c.NotBefore, &c.Expired); err != nil {
+			log.Println(err)
+			break
+		}
+		certs = append(certs, c)
+	}
+	return certs
+}
+
+func (dbw *dbwrapper) GetStatesByValid(valid int) []DBStateRow {
+	var state DBStateRow
+
+	states := make([]DBStateRow, 0, 1)
+	sql := fmt.Sprintf(`
+		SELECT host, sni, description FROM states WHERE valid=%d
+	`, valid)
+	rows, err := dbw.Query(sql)
+	if err != nil {
+		log.Println(err)
+		return states
+	}
+	defer rows.Close()
+	for rows.Next() {
+		if err := rows.Scan(&state.Host, &state.SNI, &state.Description); err != nil {
+			log.Println(err)
+			break
+		}
+		states = append(states, state)
+	}
+	return states
+}
+
 func (dbw *dbwrapper) GetStates() []DBStateRow {
-	var (
-		host string
-		sni  string
-		id   int
-	)
+	var state DBStateRow
+
 	states := make([]DBStateRow, 0, 1)
 	sql := fmt.Sprintf(`SELECT id, host, sni FROM states`)
 	rows, err := dbw.Query(sql)
@@ -205,21 +264,17 @@ func (dbw *dbwrapper) GetStates() []DBStateRow {
 	}
 	defer rows.Close()
 	for rows.Next() {
-		if err := rows.Scan(&id, &host, &sni); err != nil {
+		if err := rows.Scan(&state.ID, &state.Host, &state.SNI); err != nil {
 			log.Println(err)
 			break
 		}
-		states = append(states, DBStateRow{
-			ID:   id,
-			Host: host,
-			SNI:  sni,
-		})
+		states = append(states, state)
 	}
 	return states
 }
 
-func (dbw *dbwrapper) UpdateState(state *DBStateRow, certs []DBCertRow) error {
-	for _, cert := range certs {
+func (dbw *dbwrapper) UpdateState(state *DBStateRow) error {
+	for _, cert := range state.Certificates {
 		if err := dbw.InsertCert(cert); err != nil {
 			return nil
 		}
@@ -228,7 +283,7 @@ func (dbw *dbwrapper) UpdateState(state *DBStateRow, certs []DBCertRow) error {
 	sql := fmt.Sprintf(`
 			UPDATE states SET valid=%d, description='%s', ts='%s'
 			WHERE host='%s' AND sni='%s';
-		`, state.Valid, state.Description, state.TS, state.Host, state.SNI)
+		`, state.Valid, state.Description, TimestampToSQLite(state.TS), state.Host, state.SNI)
 
 	sql = sql + fmt.Sprintf(`
 		DELETE FROM state_certs WHERE EXISTS (
@@ -236,7 +291,7 @@ func (dbw *dbwrapper) UpdateState(state *DBStateRow, certs []DBCertRow) error {
 			);
 	`, state.Host, state.SNI)
 
-	for _, cert := range certs {
+	for _, cert := range state.Certificates {
 		sql = sql + fmt.Sprintf(`
 			INSERT INTO state_certs(state_id, fingerprint) 
 			SELECT id, '%s' FROM states WHERE host='%s' AND sni='%s';
