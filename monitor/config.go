@@ -13,12 +13,20 @@ type ZoneConfig struct {
 	Proto  string `json:"proto,omitempty"`
 }
 
+type StateConfig struct {
+	Host string `json:"host"`
+	SNI  string `json:"sni"`
+}
+
 type Context struct {
-	Listen          string       `json:"listen"`
-	TLSTimeout      int          `json:"tlsTimeout"`
-	RetransferDelay int          `json:"retransferDelay"`
-	Zones           []ZoneConfig `json:"zones"`
-	Data            string       `json:"data"`
+	Listen          string        `json:"listen"`
+	TLSTimeout      int           `json:"tlsTimeout"`
+	RetransferDelay int           `json:"retransferDelay"`
+	WatcherDelay    int           `json:"watcherDelay"`
+	Zones           []ZoneConfig  `json:"zones"`
+	Data            string        `json:"data"`
+	MaxThreads      int           `json:"maxThreads"`
+	States          []StateConfig `json:"states"`
 }
 
 func loadConfig(filename string) (*Context, error) {
