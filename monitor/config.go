@@ -7,26 +7,34 @@ import (
 	"os"
 )
 
+// ZoneConfig represents item at `zone` configuration section
+// 	Master - master DNS server
+//	Name - zone name
+//	Proto - protocol (tcp/udp)
 type ZoneConfig struct {
-	Name   string `json:"name"`
 	Master string `json:"master"`
+	Name   string `json:"name"`
 	Proto  string `json:"proto,omitempty"`
 }
 
-type StateConfig struct {
-	Host string `json:"host"`
-	SNI  string `json:"sni"`
-}
-
+// Context represents application configuration
+//	WorkDir - path, contains db, etc
+//	Listen - listen interface and port
+//	LogPrefix - global logging prefix
+//	MaxThreads - max number of monitor workers
+//	RetransferDelay - delay between afxr requests
+//	TLSTimeout - timeout TLS connections
+//	WatcherDelay - delay between periodic state checks
+// Zones - see `ZoneConfig`
 type Context struct {
-	Listen          string        `json:"listen"`
-	TLSTimeout      int           `json:"tlsTimeout"`
-	RetransferDelay int           `json:"retransferDelay"`
-	WatcherDelay    int           `json:"watcherDelay"`
-	Zones           []ZoneConfig  `json:"zones"`
-	Data            string        `json:"data"`
-	MaxThreads      int           `json:"maxThreads"`
-	States          []StateConfig `json:"states"`
+	WorkDir         string       `json:"workDir"`
+	Listen          string       `json:"listen"`
+	LogPrefix       string       `json:"logPrefix"`
+	MaxThreads      int          `json:"maxThreads"`
+	RetransferDelay int          `json:"retransferDelay"`
+	TLSTimeout      int          `json:"tlsTimeout"`
+	WatcherDelay    int          `json:"watcherDelay"`
+	Zones           []ZoneConfig `json:"zones"`
 }
 
 func loadConfig(filename string) (*Context, error) {
