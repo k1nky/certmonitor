@@ -1,0 +1,17 @@
+{
+    "listen": "0.0.0.0:8000",
+    "logPrefix": "",
+    "tlsTimeout": 10,
+    "workDir": "./data",
+    "retransferDelay": 3600,
+    "watcherDelay": 1800,
+    "maxThreads": 5,
+    "zones": [
+        {
+            "name": "example.com.",
+            "master": "192.168.0.1:53",
+            "proto": "udp"
+        }
+    ],
+    "excludes": []
+}
