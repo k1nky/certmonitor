@@ -7,6 +7,7 @@ import (
 	"github.com/miekg/dns"
 )
 
+// FetchDNS periodically requests and receives monitoring zones
 func (m Monitor) FetchDNS() {
 	delay := time.Duration(m.Ctx.RetransferDelay) * time.Second
 	go func() {
@@ -20,13 +21,15 @@ func (m Monitor) FetchDNS() {
 						m.DB.InsertState(DBStateRow{
 							Host: name + ":443",
 							SNI:  name,
+							Type: DiscoveryState,
 						})
 					} else if hdr.Rrtype == dns.TypeMX {
 						mx := v.(*dns.MX)
 						name := mx.Mx[:len(mx.Mx)-1]
 						m.DB.InsertState(DBStateRow{
-							Host: name + ":25",
+							Host: name + ":465",
 							SNI:  name,
+							Type: DiscoveryState,
 						})
 					}
 				}
@@ -47,7 +50,7 @@ func getZone(zone ZoneConfig) (records []dns.RR) {
 	msg.SetAxfr(zone.Name)
 	ch, err := tr.In(msg, zone.Master)
 	if err != nil {
-		log.Printf("Transfer zone %s from %s -is failed with error %s",
+		log.Printf("Transfer zone %s from %s is failed: %s",
 			zone.Name, zone.Master, err)
 		return
 	}
@@ -59,20 +62,6 @@ func getZone(zone ZoneConfig) (records []dns.RR) {
 		}
 		records = append(records, m.RR...)
 	}
-	log.Printf("Transfer zone %s from %s - success\n", zone.Name, zone.Master)
+	log.Printf("Transfer zone %s from %s is successfully\n", zone.Name, zone.Master)
 	return
 }
-
-/*
-func TestDNS2() {
-	master := "192.168.222.4:53"
-	d := net.Dialer{}
-	con, _ := d.Dial("udp", master)
-	defer con.Close()
-	dnscon := &dns.Conn{
-		Conn: con,
-	}
-	defer dnscon.Close()
-	transfer := &dns.Transfer{Conn: dnscon}
-}
-*/
