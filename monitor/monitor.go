@@ -1,12 +1,17 @@
 package monitor
 
 import (
+	"fmt"
 	"log"
 	"os"
 	"path"
 	"regexp"
 	"strings"
 	"time"
+)
+
+const (
+	warmUpDealy = 30
 )
 
 // Monitor is Monitor :)
@@ -19,19 +24,19 @@ func NewMonitor() *Monitor {
 	return &Monitor{}
 }
 
-func (mon *Monitor) LoadConfig(filename string) error {
-	ctx, err := loadConfig(filename)
-	mon.Ctx = ctx
-	return err
+func (mon *Monitor) LoadConfig(filename string) (err error) {
+	mon.Ctx, err = loadConfig(filename)
+	return
 }
 
 func (mon *Monitor) Run() {
-	if err := os.MkdirAll(mon.Ctx.Data, os.ModePerm); err != nil {
+	if err := os.MkdirAll(mon.Ctx.WorkDir, os.ModePerm); err != nil {
 		log.Fatalln(err)
 	}
-	if err := mon.NewDBWrapper(path.Join(mon.Ctx.Data, "local.db")); err != nil {
+	if err := mon.NewDBWrapper(path.Join(mon.Ctx.WorkDir, "local.db")); err != nil {
 		log.Fatalln(err)
 	}
+
 	mon.FetchDNS()
 	mon.RunWatcher()
 }
@@ -46,12 +51,13 @@ func (mon *Monitor) worker(jobs <-chan DBStateRow) {
 func (mon *Monitor) RunWatcher() {
 	delay := time.Second * time.Duration(mon.Ctx.WatcherDelay)
 	go func() {
+		time.Sleep(time.Second * time.Duration(warmUpDealy))
 		jobs := make(chan DBStateRow)
 		for i := 0; i < mon.Ctx.MaxThreads; i++ {
 			go mon.worker(jobs)
 		}
 		for {
-			states := mon.DB.GetStates()
+			states := mon.DB.GetStatesBy("")
 			for _, state := range states {
 				jobs <- state
 			}
@@ -92,8 +98,8 @@ func (mon Monitor) UpdateState(st *DBStateRow) {
 			CommonName:        strings.ReplaceAll(cert.Subject.CommonName, "'", "''"),
 			NotAfter:          cert.NotAfter,
 			NotBefore:         cert.NotBefore,
-			Domains:           cert.DNSNames,
-			Fingerprint:       fingerprint(cert.Raw),
+			Domains:           fmt.Sprintf("%s", cert.DNSNames),
+			Fingerprint:       fingerprint(cert.RawSubject),
 			IssuerFingerprint: fingerprint(cert.RawIssuer),
 			Expired:           int(cert.NotAfter.Sub(time.Now()).Seconds()),
 		})
