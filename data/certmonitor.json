@@ -1,13 +1,17 @@
 {
     "listen": "0.0.0.0:8000",
+    "logPrefix": "",
     "tlsTimeout": 10,
-    "data": "./data",
-    "retransferDelay": 10,
+    "workDir": "./data",
+    "retransferDelay": 100,
+    "watcherDelay": 200,
+    "maxThreads": 5,
     "zones": [
         {
             "name": "yandex.ru.",
             "master": "172.24.0.1:53",
             "proto": "udp"
         }
-    ]
+    ],
+    "excludes": []
 }
