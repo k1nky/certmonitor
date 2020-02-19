@@ -41,6 +41,10 @@ func (mon *Monitor) Run() {
 	mon.RunWatcher()
 }
 
+func (mon *Monitor) Stop() {
+
+}
+
 func (mon *Monitor) worker(jobs <-chan DBStateRow) {
 	for state := range jobs {
 		mon.UpdateState(&state)
