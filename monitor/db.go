@@ -1,6 +1,7 @@
 package monitor
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"log"
@@ -40,6 +41,7 @@ type dbwrapper struct {
 
 // DBWrapper represents application database
 type DBWrapper interface {
+	Close()
 	GetCertificateByID(id int) *DBCertRow
 	GetCertificatesBy(where string) []DBCertRow
 	GetCertificatesByExpire(expire int) []DBCertRow
@@ -50,7 +52,7 @@ type DBWrapper interface {
 	InsertCert(cert DBCertRow) error
 	InsertState(state DBStateRow) error
 	UpdateState(state *DBStateRow) error
-	RunWriter()
+	RunWriter(ctx context.Context)
 	SingleWrite(sql string) (ch chan error)
 }
 
@@ -80,10 +82,12 @@ func timestampToSQLite(ts time.Time) string {
 	return ts.Format(time.RFC3339)
 }
 
-func (dbw *dbwrapper) RunWriter() {
+func (dbw *dbwrapper) RunWriter(ctx context.Context) {
 	go func() {
 		for {
 			select {
+			case <-ctx.Done():
+				return
 			case task := <-dbw.Writer:
 				tx, err := dbw.Begin()
 				if err != nil {
@@ -129,11 +133,16 @@ func (mon *Monitor) NewDBWrapper(filename string) (err error) {
 		make(chan DBWriteTask),
 	}
 
-	mon.DB.RunWriter()
 	if err := mon.DB.InitDB(); err != nil {
 		return err
 	}
+	log.Printf("Database %s is opened successfully\n", filename)
 	return nil
+}
+
+func (dbw *dbwrapper) Close() {
+	log.Println("Database is closed")
+	dbw.DB.Close()
 }
 
 func (dbw *dbwrapper) InitDB() error {

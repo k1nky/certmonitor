@@ -1,6 +1,7 @@
 package monitor
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
@@ -11,61 +12,85 @@ import (
 )
 
 const (
-	warmUpDealy = 30
+	warmUpDealy = 10
 )
 
 // Monitor is Monitor :)
 type Monitor struct {
-	Ctx *Context
-	DB  DBWrapper
+	Cfg        *Config
+	ConfigFile string
+	Ctx        context.Context
+	DB         DBWrapper
+	stop       chan interface{}
 }
 
 func NewMonitor() *Monitor {
-	return &Monitor{}
+	return &Monitor{
+		Ctx:  context.Background(),
+		stop: make(chan interface{}),
+	}
 }
 
 func (mon *Monitor) LoadConfig(filename string) (err error) {
-	mon.Ctx, err = loadConfig(filename)
+	mon.ConfigFile = filename
+	mon.Cfg, err = loadConfig(filename)
 	return
 }
 
 func (mon *Monitor) Run() {
-	if err := os.MkdirAll(mon.Ctx.WorkDir, os.ModePerm); err != nil {
+	ctxWithCancel, cancelFunction := context.WithCancel(mon.Ctx)
+	go func() {
+		<-mon.stop
+		cancelFunction()
+	}()
+	if err := os.MkdirAll(mon.Cfg.WorkDir, os.ModePerm); err != nil {
 		log.Fatalln(err)
 	}
-	if err := mon.NewDBWrapper(path.Join(mon.Ctx.WorkDir, "local.db")); err != nil {
+	if err := mon.NewDBWrapper(path.Join(mon.Cfg.WorkDir, "local.db")); err != nil {
 		log.Fatalln(err)
 	}
 
-	mon.FetchDNS()
-	mon.RunWatcher()
+	mon.DB.RunWriter(ctxWithCancel)
+	mon.FetchDNS(ctxWithCancel)
+	mon.RunWatcher(ctxWithCancel)
 }
 
 func (mon *Monitor) Stop() {
-
+	mon.stop <- true
+	mon.DB.Close()
 }
 
-func (mon *Monitor) worker(jobs <-chan DBStateRow) {
-	for state := range jobs {
-		mon.UpdateState(&state)
-		mon.DB.UpdateState(&state)
+func (mon *Monitor) worker(ctx context.Context, jobs <-chan DBStateRow) {
+	for {
+		select {
+		case state := <-jobs:
+			mon.UpdateState(&state)
+			mon.DB.UpdateState(&state)
+		case <-ctx.Done():
+			return
+		}
 	}
 }
 
-func (mon *Monitor) RunWatcher() {
-	delay := time.Second * time.Duration(mon.Ctx.WatcherDelay)
+func (mon *Monitor) RunWatcher(ctx context.Context) {
+	delay := time.Second * time.Duration(mon.Cfg.WatcherDelay)
+	ticker := time.NewTicker(delay)
 	go func() {
 		time.Sleep(time.Second * time.Duration(warmUpDealy))
 		jobs := make(chan DBStateRow)
-		for i := 0; i < mon.Ctx.MaxThreads; i++ {
-			go mon.worker(jobs)
+		for i := 0; i < mon.Cfg.MaxThreads; i++ {
+			go mon.worker(ctx, jobs)
 		}
 		for {
 			states := mon.DB.GetStatesBy("")
 			for _, state := range states {
 				jobs <- state
 			}
-			time.Sleep(delay)
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
 		}
 	}()
 }
@@ -93,10 +118,13 @@ func (mon Monitor) UpdateState(st *DBStateRow) {
 	certs := mon.GetCertificates(st.Host, st.SNI)
 	st.Certificates = make([]DBCertRow, 0, 1)
 	st.Valid = ValidState
+	st.Description = ""
+
 	if certs == nil {
 		st.Valid = UnknownState
 		return
 	}
+	sni := st.SNI
 	for _, cert := range certs {
 		st.Certificates = append(st.Certificates, DBCertRow{
 			CommonName:        strings.ReplaceAll(cert.Subject.CommonName, "'", "''"),
@@ -107,13 +135,10 @@ func (mon Monitor) UpdateState(st *DBStateRow) {
 			IssuerFingerprint: fingerprint(cert.RawIssuer),
 			Expired:           int(cert.NotAfter.Sub(time.Now()).Seconds()),
 		})
-		if err := CheckCertificate(cert, ""); err != nil {
+		if err := CheckCertificate(cert, sni); err != nil {
 			st.Valid = InvalidState
-			st.Description = err.Error() + "\n" + st.Description
+			st.Description = st.Description + "\n" + err.Error()
 		}
-	}
-	if err := CheckCertificate(certs[0], st.SNI); err != nil {
-		st.Valid = InvalidState
-		st.Description = err.Error() + "\n" + st.Description
+		sni = ""
 	}
 }

@@ -1,40 +1,53 @@
 package monitor
 
 import (
+	"context"
 	"log"
 	"time"
 
 	"github.com/miekg/dns"
 )
 
+func (mon Monitor) discoveryZones() {
+	for _, zone := range mon.Cfg.Zones {
+		records := getZone(zone)
+		for _, v := range records {
+			hdr := v.Header()
+			if hdr.Rrtype == dns.TypeA {
+				name := hdr.Name[:len(hdr.Name)-1]
+				mon.DB.InsertState(DBStateRow{
+					Host: name + ":443",
+					SNI:  name,
+					Type: DiscoveryState,
+				})
+			} else if hdr.Rrtype == dns.TypeMX {
+				mx := v.(*dns.MX)
+				name := mx.Mx[:len(mx.Mx)-1]
+				mon.DB.InsertState(DBStateRow{
+					Host: name + ":465",
+					SNI:  name,
+					Type: DiscoveryState,
+				})
+			}
+		}
+	}
+}
+
 // FetchDNS periodically requests and receives monitoring zones
-func (m Monitor) FetchDNS() {
-	delay := time.Duration(m.Ctx.RetransferDelay) * time.Second
+func (mon Monitor) FetchDNS(ctx context.Context) {
+	delay := time.Duration(mon.Cfg.RetransferDelay) * time.Second
+	ticker := time.NewTicker(delay)
+	log.Println("Start discovery DNS zones")
 	go func() {
 		for {
-			for _, zone := range m.Ctx.Zones {
-				records := getZone(zone)
-				for _, v := range records {
-					hdr := v.Header()
-					if hdr.Rrtype == dns.TypeA {
-						name := hdr.Name[:len(hdr.Name)-1]
-						m.DB.InsertState(DBStateRow{
-							Host: name + ":443",
-							SNI:  name,
-							Type: DiscoveryState,
-						})
-					} else if hdr.Rrtype == dns.TypeMX {
-						mx := v.(*dns.MX)
-						name := mx.Mx[:len(mx.Mx)-1]
-						m.DB.InsertState(DBStateRow{
-							Host: name + ":465",
-							SNI:  name,
-							Type: DiscoveryState,
-						})
-					}
-				}
+			mon.discoveryZones()
+			select {
+			case <-ctx.Done():
+				ticker.Stop()
+				log.Println("Stop discovery DNS zones")
+				return
+			case <-ticker.C:
 			}
-			time.Sleep(delay)
 		}
 	}()
 }

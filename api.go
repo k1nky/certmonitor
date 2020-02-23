@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type ZabbixCertDiscovery struct {
@@ -25,6 +26,8 @@ var (
 	validateParamHost   *regexp.Regexp
 	validateParamSNI    *regexp.Regexp
 	validateParamNumber *regexp.Regexp
+	httpSrv             *http.Server
+	httpMux             *http.ServeMux
 )
 
 func init() {
@@ -32,12 +35,13 @@ func init() {
 	validateParamSNI, _ = regexp.Compile("[A-Za-z\\d\\.\\-]{1,}")
 	validateParamNumber, _ = regexp.Compile("\\d*")
 
-	http.HandleFunc("/check", onCheck)
-	http.HandleFunc("/certs", onCerts)
-	http.HandleFunc("/states", onStates)
-	http.HandleFunc("/report/valid", onReport)
-	http.HandleFunc("/report/expire", onReport)
-	http.HandleFunc("/zabbix/", onZabbix)
+	httpMux = &http.ServeMux{}
+	httpMux.HandleFunc("/check", onCheck)
+	httpMux.HandleFunc("/certs", onCerts)
+	httpMux.HandleFunc("/states", onStates)
+	httpMux.HandleFunc("/report/valid", onReport)
+	httpMux.HandleFunc("/report/expire", onReport)
+	httpMux.HandleFunc("/zabbix/", onZabbix)
 }
 
 func getSingleQueryParam(r *http.Request, name string) string {
@@ -194,4 +198,23 @@ func onZabbix(w http.ResponseWriter, r *http.Request) {
 func replyBadRequest(w http.ResponseWriter, r *http.Request) {
 	log.Println("Invalid request or request's parameters ", r.URL.Query())
 	w.WriteHeader(http.StatusBadRequest)
+}
+
+func runHTTPServer() {
+	httpSrv = &http.Server{
+		Addr:         certmon.Cfg.Listen,
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 10 * time.Second,
+		Handler:      httpMux,
+	}
+
+	log.Println("ListenAndServe: ", certmon.Cfg.Listen)
+	if err := httpSrv.ListenAndServe(); err != nil {
+		log.Println("ListenAndServe:", err)
+	}
+
+}
+
+func stopHTTPServer() {
+	httpSrv.Close()
 }
