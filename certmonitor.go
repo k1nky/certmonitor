@@ -4,7 +4,6 @@ import (
 	"certmonitor/monitor"
 	"flag"
 	"log"
-	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -17,12 +16,25 @@ var (
 
 func init() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
-	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
-	go func() {
-		sig := <-signals
-		log.Println(sig)
-	}()
+	catchOSSignals()
 	certmon = monitor.NewMonitor()
+}
+
+func catchOSSignals() {
+	signals = make(chan os.Signal)
+	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM, syscall.SIGUSR2)
+	go func() {
+		for {
+			sig := <-signals
+			if sig == syscall.SIGUSR2 {
+				certmon.LoadConfig(certmon.ConfigFile)
+			} else {
+				certmon.Stop()
+				stopHTTPServer()
+				return
+			}
+		}
+	}()
 }
 
 func main() {
@@ -38,11 +50,7 @@ func main() {
 		return
 	}
 
-	log.SetPrefix(certmon.Ctx.LogPrefix)
+	log.SetPrefix(certmon.Cfg.LogPrefix)
 	certmon.Run()
-	log.Println("ListenAndServe: ", certmon.Ctx.Listen)
-	err := http.ListenAndServe(certmon.Ctx.Listen, nil)
-	if err != nil {
-		log.Fatalln("ListenAndServe:", err)
-	}
+	runHTTPServer()
 }
