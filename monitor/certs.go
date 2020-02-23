@@ -30,7 +30,7 @@ func fingerprint(data []byte) string {
 // GetCertificates returns the full certificate chain from TLS connection
 func (mon Monitor) GetCertificates(host string, sni string) []*x509.Certificate {
 
-	timeout := time.Duration(mon.Ctx.TLSTimeout) * time.Second
+	timeout := time.Duration(mon.Cfg.TLSTimeout) * time.Second
 	tcpConn, err := net.DialTimeout("tcp", host, timeout)
 	if err != nil {
 		log.Printf("Failed to establish TCP connection to %s: %s\n", host, err)

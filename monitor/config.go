@@ -12,12 +12,13 @@ import (
 //	Name - zone name
 //	Proto - protocol (tcp/udp)
 type ZoneConfig struct {
-	Master string `json:"master"`
-	Name   string `json:"name"`
-	Proto  string `json:"proto,omitempty"`
+	Master   string   `json:"master"`
+	Name     string   `json:"name"`
+	Proto    string   `json:"proto,omitempty"`
+	Excludes []string `json:"excludes"`
 }
 
-// Context represents application configuration
+// Config represents application configuration
 //	WorkDir - path, contains db, etc
 //	Listen - listen interface and port
 //	LogPrefix - global logging prefix
@@ -26,7 +27,7 @@ type ZoneConfig struct {
 //	TLSTimeout - timeout TLS connections
 //	WatcherDelay - delay between periodic state checks
 // Zones - see `ZoneConfig`
-type Context struct {
+type Config struct {
 	WorkDir         string       `json:"workDir"`
 	Listen          string       `json:"listen"`
 	LogPrefix       string       `json:"logPrefix"`
@@ -37,8 +38,8 @@ type Context struct {
 	Zones           []ZoneConfig `json:"zones"`
 }
 
-func loadConfig(filename string) (*Context, error) {
-	var ctx *Context
+func loadConfig(filename string) (*Config, error) {
+	var cfg *Config
 
 	file, err := os.Open(filename)
 	if err != nil {
@@ -53,9 +54,9 @@ func loadConfig(filename string) (*Context, error) {
 		return nil, err
 	}
 
-	if err := json.Unmarshal(bytes, &ctx); err != nil {
+	if err := json.Unmarshal(bytes, &cfg); err != nil {
 		log.Println("LoadConfig: ", err)
 		return nil, err
 	}
-	return ctx, nil
+	return cfg, nil
 }
