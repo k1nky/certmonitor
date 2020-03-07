@@ -12,19 +12,19 @@ import (
 
 // DBStateRow represents table `states` row
 type DBStateRow struct {
-	ID           int       `json:"id"`
-	Host         string    `json:"host"`
-	SNI          string    `json:"sni"`
-	Valid        int       `json:"valid"`
-	Description  string    `json:"description"`
-	TS           time.Time `json:"ts"`
-	Type         int       `json:"type"`
-	Certificates []DBCertRow
+	ID           int         `json:"id"`
+	Host         string      `json:"host"`
+	SNI          string      `json:"sni"`
+	Valid        int         `json:"valid"`
+	Description  string      `json:"description"`
+	TS           time.Time   `json:"ts"`
+	Type         int         `json:"type"`
+	Certificates []DBCertRow `json:"certificates"`
 }
 
 // DBCertRow represents table `certs` row
 type DBCertRow struct {
-	ID                int
+	ID                int       `json:"id"`
 	Fingerprint       string    `json:"fingerprint"`
 	IssuerFingerprint string    `json:"issuerFingerprint"`
 	CommonName        string    `json:"commonName"`

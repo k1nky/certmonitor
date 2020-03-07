@@ -42,6 +42,8 @@ func init() {
 	httpMux.HandleFunc("/report/valid", onReport)
 	httpMux.HandleFunc("/report/expire", onReport)
 	httpMux.HandleFunc("/zabbix/", onZabbix)
+	fs := http.FileServer(http.Dir("ui"))
+	httpMux.Handle("/", fs)
 }
 
 func getSingleQueryParam(r *http.Request, name string) string {
