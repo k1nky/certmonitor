@@ -3,15 +3,17 @@
     "logPrefix": "",
     "tlsTimeout": 10,
     "workDir": "./data",
-    "retransferDelay": 3600,
-    "watcherDelay": 1800,
+    "retransferDelay": 1000,
+    "watcherDelay": 2000,
     "maxThreads": 5,
     "zones": [
         {
             "name": "example.com.",
             "master": "192.168.0.1:53",
-            "proto": "udp"
+            "proto": "udp",
+            "omitMX": false,
+            "portMX": 465,
+            "excludes": []
         }
-    ],
-    "excludes": []
+    ]
 }
