@@ -2,6 +2,7 @@ package monitor
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"time"
 
@@ -20,11 +21,11 @@ func (mon Monitor) discoveryZones() {
 					SNI:  name,
 					Type: DiscoveryState,
 				})
-			} else if hdr.Rrtype == dns.TypeMX {
+			} else if !zone.OmitMx && hdr.Rrtype == dns.TypeMX {
 				mx := v.(*dns.MX)
 				name := mx.Mx[:len(mx.Mx)-1]
 				mon.DB.InsertState(DBStateRow{
-					Host: name + ":465",
+					Host: fmt.Sprintf("%s:%d", name, zone.PortMX),
 					SNI:  name,
 					Type: DiscoveryState,
 				})

@@ -15,6 +15,8 @@ type ZoneConfig struct {
 	Master   string   `json:"master"`
 	Name     string   `json:"name"`
 	Proto    string   `json:"proto,omitempty"`
+	OmitMx   bool     `json:"omitMX"`
+	PortMX   int      `json:"portMX"`
 	Excludes []string `json:"excludes"`
 }
 
