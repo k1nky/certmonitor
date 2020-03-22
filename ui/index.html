@@ -3,10 +3,10 @@
 <head>
     <meta charset="utf-8" />
     <script src="https://code.jquery.com/jquery-3.3.1.js"></script>
-    <script language="javascript" src="/ui.js"></script>
     <script src="https://cdn.datatables.net/1.10.20/js/jquery.dataTables.min.js"></script>
     <script src="https://cdn.datatables.net/1.10.20/js/dataTables.bootstrap.min.js"></script>
     <script type="text/javascript" src="http://maxcdn.bootstrapcdn.com/bootstrap/3.3.2/js/bootstrap.min.js"></script>
+    <script language="javascript" src="/ui.js"></script>
     <link rel="stylesheet" href="https://cdn.datatables.net/1.10.20/css/dataTables.bootstrap.min.css" />
     <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.7/css/bootstrap.min.css" />
     <style>
@@ -14,16 +14,27 @@
             margin: 0 auto;
             width: 970px;
         }
+        td.details-control {
+            cursor: pointer;
+        }
+        tr.shown td.details-control {
+            
+        }
     </style>
 </head>
 <body>
-
+    <div class="spinner-border" role="status">
+        <span class="sr-only">Loading...</span>
+    </div>
     <ul class="nav nav-tabs" role="tablist">
         <li role="presentation" class="active">
             <a href="#tab-certificates" aria-controls="tab-certificates" role="tab" data-toggle="tab">Certificates</a>
         </li>
         <li role="presentation">
             <a href="#tab-states" aria-controls="tab-states" role="tab" data-toggle="tab">Host states</a>
+        </li>
+        <li role="presentation">
+            <a href="#tab-statecerts" aria-controls="tab-statecerts" role="tab" data-toggle="tab">State certificates</a>
         </li>
         <li role="presentation">
             <a href="#tab-onlinecheck" aria-controls="tab-onlinecheck" role="tab" data-toggle="tab">Online check</a>
@@ -36,7 +47,8 @@
                     <tr>
                         <th>Common name</th>
                         <th>Fingerprint</th>
-                        <th>Issuer</th>
+                        <th>SubjectHash</th>
+                        <th>IssuerHash</th>
                         <th>Domains</th>
                         <th>Expired</th>
                     </tr>
@@ -59,6 +71,23 @@
                 </tbody>
             </table>    
         </div>
+        <div role="tabpanel" class="tab-pane fade" id="tab-statecerts">
+            <table id="statecertsTable" class="table table-striped table-bordered" style="width:100%">
+                <thead>
+                    <tr>
+                        <th></th>
+                        <th>Host > SNI</th>
+                        <th>Fingerprint</th>
+                        <th>Type</th>
+                        <th>Valid</th>
+                        <th>Description</th>
+                        <th>Expired</th>
+                    </tr>
+                </thead>
+                <tbody>
+                </tbody>
+            </table>    
+        </div>
         <div role="tabpanel" class="tab-pane fade" id="tab-onlinecheck">
             <div class="input-group">
                 <span class="input-group-btn">                    
@@ -73,11 +102,10 @@
                 <div class="panel-heading">Report</div>
                 <div id="onlinecheck-result" class="panel-body">
                     <div class="row bg-success">
-                        <div class="col-md-1">Status: <span id="onlinecheck-status"></span></div>
+                        <div class="col-md-2">Status: <span id="onlinecheck-status"></span></div>
                         <div class="col-md-4">Description: <span id="onlinecheck-msg"></span></div>
                     </div>
                     <ul id="onlinecheck-certificates">
-                        <li>...</li>
                     </ul>                        
                 </div>
             </div>

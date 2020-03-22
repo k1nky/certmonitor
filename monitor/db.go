@@ -3,66 +3,13 @@ package monitor
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 )
-
-// DBStateRow represents table `states` row
-type DBStateRow struct {
-	ID           int         `json:"id"`
-	Host         string      `json:"host"`
-	SNI          string      `json:"sni"`
-	Valid        int         `json:"valid"`
-	Description  string      `json:"description"`
-	TS           time.Time   `json:"ts"`
-	Type         int         `json:"type"`
-	Certificates []DBCertRow `json:"certificates"`
-}
-
-// DBCertRow represents table `certs` row
-type DBCertRow struct {
-	ID                int       `json:"id"`
-	Fingerprint       string    `json:"fingerprint"`
-	IssuerFingerprint string    `json:"issuerFingerprint"`
-	CommonName        string    `json:"commonName"`
-	Domains           string    `json:"domains"`
-	NotAfter          time.Time `json:"notAfter"`
-	NotBefore         time.Time `json:"notBefore"`
-	Expired           int       `json:"expired"`
-}
-
-type dbwrapper struct {
-	*sql.DB
-	Writer chan DBWriteTask
-}
-
-// DBWrapper represents application database
-type DBWrapper interface {
-	Close()
-	GetCertificateByID(id int) *DBCertRow
-	GetCertificatesBy(where string) []DBCertRow
-	GetCertificatesByExpire(expire int) []DBCertRow
-	GetStatesBy(where string) []DBStateRow
-	GetStateByID(id int) *DBStateRow
-	GetStatesByValid(valid int) []DBStateRow
-	InitDB() error
-	InsertCert(cert DBCertRow) error
-	InsertState(state DBStateRow) error
-	UpdateState(state *DBStateRow) error
-	RunWriter(ctx context.Context)
-	SingleWrite(sql string) (ch chan error)
-}
-
-// DBWriteTask represents database writing task
-//	Out - writing result
-//	SQL - query
-type DBWriteTask struct {
-	Out chan error
-	SQL string
-}
 
 const (
 	// InvalidState mean that host has invalid TLS state
@@ -78,8 +25,94 @@ const (
 	DiscoveryState = 1
 )
 
+// DBStateRow represents table `states` row
+type DBStateRow struct {
+	Certificates  []DBCertRow `json:"certificates"`
+	Description   string      `json:"description"`
+	Host          string      `json:"host"`
+	ID            int         `json:"id"`
+	LastDiscovery time.Time   `json:"lasDiscovery"`
+	SNI           string      `json:"sni"`
+	TS            time.Time   `json:"ts"`
+	Type          int         `json:"type"`
+	Valid         int         `json:"valid"`
+}
+
+// DBCertRow represents table `certs` row
+type DBCertRow struct {
+	CommonName  string    `json:"commonName"`
+	Domains     string    `json:"domains"`
+	Expired     int       `json:"expired"`
+	Fingerprint string    `json:"fingerprint"`
+	ID          int       `json:"id"`
+	IssuerHash  string    `json:"issuerHash"`
+	NotAfter    time.Time `json:"notAfter"`
+	NotBefore   time.Time `json:"notBefore"`
+	SubjectHash string    `json:"subjectHash"`
+}
+
+type dbwrapper struct {
+	*sql.DB
+	Writer chan DBWriteTask
+}
+
+// DBWrapper represents application database
+type DBWrapper interface {
+	Close()
+	InitDB() error
+	RunWriter(ctx context.Context)
+	SingleWrite(sql string) (ch chan error)
+
+	DeleteCertificateBy(where string) error
+	DeleteExclude(host string, sni string) error
+	DeleteStateBy(where string) error
+	GetCertificateByID(id int) *DBCertRow
+	GetCertificatesBy(where string) []DBCertRow
+	GetCertificatesByExpire(expire int) []DBCertRow
+	GetStateCertsBy(where string) []DBStateRow
+	GetStatesBy(where string) []DBStateRow
+	GetStatesByExpire(expire int) []DBStateRow
+	GetStateByID(id int) *DBStateRow
+	GetStatesByValid(valid int) []DBStateRow
+	InsertCert(cert DBCertRow) error
+	InsertExclude(host string, sni string) error
+	InsertState(state DBStateRow) error
+	UpdateState(state *DBStateRow) error
+	UpdateStateLastDiscovery(state *DBStateRow) error
+}
+
+// DBWriteTask represents database writing task
+//	Out - writing result
+//	SQL - query
+type DBWriteTask struct {
+	Out chan error
+	SQL string
+}
+
 func timestampToSQLite(ts time.Time) string {
 	return ts.Format(time.RFC3339)
+}
+
+func OpenDB(filename string) *dbwrapper {
+	var dbw *dbwrapper
+
+	db, err := sql.Open("sqlite3", filename)
+	if err != nil {
+		log.Println(err)
+		return nil
+	}
+	dbw = &dbwrapper{
+		db,
+		make(chan DBWriteTask),
+	}
+
+	if err := dbw.InitDB(); err != nil {
+		db.Close()
+		log.Panicln(err)
+		return nil
+	}
+	log.Printf("Database %s is opened successfully\n", filename)
+	return dbw
 }
 
 func (dbw *dbwrapper) RunWriter(ctx context.Context) {
@@ -119,27 +152,6 @@ func (dbw *dbwrapper) SingleWrite(sql string) (ch chan error) {
 	return ch
 }
 
-func (mon *Monitor) NewDBWrapper(filename string) (err error) {
-	var (
-		db *sql.DB
-	)
-	db, err = sql.Open("sqlite3", filename)
-	if err != nil {
-		log.Println(err)
-		return err
-	}
-	mon.DB = &dbwrapper{
-		db,
-		make(chan DBWriteTask),
-	}
-
-	if err := mon.DB.InitDB(); err != nil {
-		return err
-	}
-	log.Printf("Database %s is opened successfully\n", filename)
-	return nil
-}
-
 func (dbw *dbwrapper) Close() {
 	log.Println("Database is closed")
 	dbw.DB.Close()
@@ -152,6 +164,7 @@ func (dbw *dbwrapper) InitDB() error {
 		id integer not null primary key,
 		host text not null,
 		sni text,
+		last_discovery timestamp,
 		ts timestamp DEFAULT CURRENT_TIMESTAMP,
 		valid integer DEFAULT -1,
 		description text DEFAULT '',
@@ -162,7 +175,8 @@ func (dbw *dbwrapper) InitDB() error {
 	CREATE TABLE IF NOT EXISTS certs(
 		id integer not null primary key,
 		fingerprint text not null,
-		issuer_fingerprint text,
+		issuer_hash text,
+		subject_hash text not null,
 		common_name text,
 		domains text,
 		not_after timestamp,
@@ -175,9 +189,21 @@ func (dbw *dbwrapper) InitDB() error {
 		state_id integer,
 		fingerprint text
 	);
+	CREATE TABLE IF NOT EXISTS excludes (
+		id integer not null primary key,
+		host text not null,
+		sni text
+	);
 	CREATE VIEW IF NOT EXISTS vCerts AS
 		SELECT certs.*, (strftime('%s', not_after) - strftime('%s', 'now')) / (24 * 3600) AS expired
 		FROM certs;
+	CREATE VIEW IF NOT EXISTS vStates AS
+		SELECT 
+			s.id AS state_id, host, sni, type, valid, description,
+			c.id as cert_id, c.fingerprint, issuer_hash, subject_hash, common_name, domains, not_after, not_before, expired
+		FROM states AS s
+			INNER JOIN state_certs AS sc ON s.id = sc.state_id
+			INNER JOIN vCerts AS c ON c.fingerprint = sc.fingerprint;
 	`
 	_, err := dbw.Exec(sql)
 	if err != nil {
@@ -186,41 +212,33 @@ func (dbw *dbwrapper) InitDB() error {
 	return nil
 }
 
-func (dbw *dbwrapper) InsertCert(cert DBCertRow) error {
-
-	sql := fmt.Sprintf(`
-		INSERT INTO certs(
-			fingerprint, issuer_fingerprint, common_name, domains,
-			not_after, not_before
-		) 
-		SELECT '%s', '%s', '%s', '%s', '%s', '%s'
-		WHERE  NOT EXISTS (SELECT 1 FROM certs WHERE fingerprint = '%s');
-	`, cert.Fingerprint, cert.IssuerFingerprint, cert.CommonName,
-		cert.Domains, timestampToSQLite(cert.NotAfter), timestampToSQLite(cert.NotBefore), cert.Fingerprint)
-
+func (dbw *dbwrapper) DeleteCertificateBy(where string) error {
+	if len(where) == 0 {
+		return errors.New("Condition for a DELETE query is empty")
+	}
+	sql := fmt.Sprintf(`DELETE FROM certs AS c WHERE %s;`, where)
 	ch := dbw.SingleWrite(sql)
-
 	return <-ch
 }
 
-func (dbw *dbwrapper) InsertState(state DBStateRow) error {
-
-	sql := fmt.Sprintf(`
-		INSERT OR IGNORE INTO states(
-			host, sni
-		) VALUES ('%s', '%s')
-		`, state.Host, state.SNI)
-
+func (dbw *dbwrapper) DeleteStateBy(where string) error {
+	if len(where) == 0 {
+		return errors.New("Condition for a DELETE query is empty")
+	}
+	sql := fmt.Sprintf(`DELETE FROM states AS s WHERE %s;`, where)
 	ch := dbw.SingleWrite(sql)
-
 	return <-ch
+}
+
+func (dbw *dbwrapper) DeleteExclude(host string, sni string) error {
+	return nil
 }
 
 func (dbw *dbwrapper) GetCertificatesBy(where string) []DBCertRow {
 	var c DBCertRow
 	sql := fmt.Sprintf(`
 		SELECT 
-			id, fingerprint, issuer_fingerprint, common_name, domains, 
+			id, fingerprint, subject_hash, issuer_hash, common_name, domains, 
 			not_after, not_before, expired
 		FROM vCerts %s
 	`, where)
@@ -233,7 +251,7 @@ func (dbw *dbwrapper) GetCertificatesBy(where string) []DBCertRow {
 	}
 	defer rows.Close()
 	for rows.Next() {
-		if err := rows.Scan(&c.ID, &c.Fingerprint, &c.IssuerFingerprint, &c.CommonName,
+		if err := rows.Scan(&c.ID, &c.Fingerprint, &c.SubjectHash, &c.IssuerHash, &c.CommonName,
 			&c.Domains, &c.NotAfter, &c.NotBefore, &c.Expired); err != nil {
 			log.Println(err)
 			break
@@ -254,6 +272,49 @@ func (dbw *dbwrapper) GetCertificateByID(id int) *DBCertRow {
 
 func (dbw *dbwrapper) GetCertificatesByExpire(expired int) []DBCertRow {
 	return dbw.GetCertificatesBy(fmt.Sprintf("WHERE expired < %d", expired))
+}
+
+func (dbw *dbwrapper) GetStateCertsBy(where string) []DBStateRow {
+	var (
+		s DBStateRow
+		c DBCertRow
+	)
+	sql := fmt.Sprintf(`
+		SELECT 
+		state_id, host, sni, type, valid, description,
+		cert_id, fingerprint, subject_hash, issuer_hash, common_name, domains, not_after, not_before, expired
+	FROM vStates %s`, where)
+	rows, err := dbw.Query(sql)
+	if err != nil {
+		log.Println(err)
+		return nil
+	}
+	defer rows.Close()
+
+	states := make(map[int]DBStateRow)
+	for rows.Next() {
+		c = DBCertRow{}
+		s = DBStateRow{}
+		if err := rows.Scan(
+			&s.ID, &s.Host, &s.SNI, &s.Type, &s.Valid, &s.Description,
+			&c.ID, &c.Fingerprint, &c.SubjectHash, &c.IssuerHash, &c.CommonName, &c.Domains, &c.NotAfter, &c.NotBefore, &c.Expired); err != nil {
+			log.Println(err)
+			break
+		}
+		if state, exists := states[s.ID]; exists {
+			state.Certificates = append(state.Certificates, c)
+			states[s.ID] = state
+		} else {
+			s.Certificates = append(s.Certificates, c)
+			states[s.ID] = s
+		}
+	}
+	result := make([]DBStateRow, 0, 1)
+	for _, v := range states {
+		result = append(result, v)
+	}
+
+	return result
 }
 
 func (dbw *dbwrapper) GetStatesBy(where string) []DBStateRow {
@@ -281,6 +342,10 @@ func (dbw *dbwrapper) GetStatesBy(where string) []DBStateRow {
 	return states
 }
 
+func (dbw *dbwrapper) GetStatesByExpire(expire int) []DBStateRow {
+	return dbw.GetStateCertsBy(fmt.Sprintf("WHERE expired < %d", expire))
+}
+
 func (dbw *dbwrapper) GetStatesByValid(valid int) []DBStateRow {
 	return dbw.GetStatesBy(fmt.Sprintf("WHERE valid=%d", valid))
 }
@@ -291,6 +356,46 @@ func (dbw *dbwrapper) GetStateByID(id int) *DBStateRow {
 		return nil
 	}
 	return &(states[0])
+}
+
+func (dbw *dbwrapper) InsertCert(cert DBCertRow) error {
+
+	sql := fmt.Sprintf(`
+		INSERT INTO certs(
+			fingerprint, subject_hash, issuer_hash, common_name, domains,
+			not_after, not_before
+		) 
+		SELECT '%s', '%s', '%s', '%s', '%s', '%s', '%s'
+		WHERE  NOT EXISTS (SELECT 1 FROM certs WHERE fingerprint = '%s');
+	`, cert.Fingerprint, cert.SubjectHash, cert.IssuerHash, cert.CommonName,
+		cert.Domains, timestampToSQLite(cert.NotAfter), timestampToSQLite(cert.NotBefore), cert.Fingerprint)
+
+	ch := dbw.SingleWrite(sql)
+
+	return <-ch
+}
+
+func (dbw *dbwrapper) InsertExclude(host string, sni string) error {
+	return nil
+}
+
+func (dbw *dbwrapper) InsertState(state DBStateRow) error {
+
+	sql := fmt.Sprintf(`
+		INSERT OR IGNORE INTO states(
+			host, sni, type 
+		) VALUES ('%s', '%s', %d);		
+		`, state.Host, state.SNI, state.Type)
+
+	ch := dbw.SingleWrite(sql)
+	if err := <-ch; err != nil {
+		return err
+	}
+	if state.Type == DiscoveryState {
+		return dbw.UpdateStateLastDiscovery(&state)
+	}
+
+	return nil
 }
 
 func (dbw *dbwrapper) UpdateState(state *DBStateRow) error {
@@ -317,6 +422,19 @@ func (dbw *dbwrapper) UpdateState(state *DBStateRow) error {
 			SELECT id, '%s' FROM states WHERE host='%s' AND sni='%s';
 		`, cert.Fingerprint, state.Host, state.SNI)
 	}
+	ch := dbw.SingleWrite(sql)
+
+	return <-ch
+}
+
+func (dbw *dbwrapper) UpdateStateLastDiscovery(state *DBStateRow) error {
+	state.LastDiscovery = time.Now()
+	sql := fmt.Sprintf(`
+		UPDATE OR IGNORE states
+			SET last_discovery = '%s'
+			WHERE host = '%s' AND sni = '%s'
+	`, timestampToSQLite(state.LastDiscovery), state.Host, state.SNI)
+
 	ch := dbw.SingleWrite(sql)
 
 	return <-ch

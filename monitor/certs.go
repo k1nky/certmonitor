@@ -13,6 +13,7 @@ import (
 
 // CheckCertificate checks certificate chain for the host
 func CheckCertificate(cert *x509.Certificate, hostname string) error {
+
 	if time.Now().After(cert.NotAfter) || time.Now().Before(cert.NotBefore) {
 		msg := fmt.Sprintf("Certificate %s is expired or inactived yet", cert.Subject.CommonName)
 		return errors.New(msg)

@@ -46,8 +46,8 @@ func (mon *Monitor) Run() {
 	if err := os.MkdirAll(mon.Cfg.WorkDir, os.ModePerm); err != nil {
 		log.Fatalln(err)
 	}
-	if err := mon.NewDBWrapper(path.Join(mon.Cfg.WorkDir, "local.db")); err != nil {
-		log.Fatalln(err)
+	if mon.DB = OpenDB(path.Join(mon.Cfg.WorkDir, "local.db")); mon.DB == nil {
+		return
 	}
 
 	mon.DB.RunWriter(ctxWithCancel)
@@ -82,10 +82,12 @@ func (mon *Monitor) RunWatcher(ctx context.Context) {
 			go mon.worker(ctx, jobs)
 		}
 		for {
+			mon.MaintainDB()
 			states := mon.DB.GetStatesBy("")
 			for _, state := range states {
 				jobs <- state
 			}
+
 			select {
 			case <-ctx.Done():
 				return
@@ -127,13 +129,14 @@ func (mon Monitor) UpdateState(st *DBStateRow) {
 	sni := st.SNI
 	for _, cert := range certs {
 		st.Certificates = append(st.Certificates, DBCertRow{
-			CommonName:        strings.ReplaceAll(cert.Subject.CommonName, "'", "''"),
-			NotAfter:          cert.NotAfter,
-			NotBefore:         cert.NotBefore,
-			Domains:           fmt.Sprintf("%s", cert.DNSNames),
-			Fingerprint:       fingerprint(cert.RawSubject),
-			IssuerFingerprint: fingerprint(cert.RawIssuer),
-			Expired:           int(cert.NotAfter.Sub(time.Now()).Seconds()),
+			CommonName:  strings.ReplaceAll(cert.Subject.CommonName, "'", "''"),
+			NotAfter:    cert.NotAfter,
+			NotBefore:   cert.NotBefore,
+			Domains:     fmt.Sprintf("%s", cert.DNSNames),
+			Fingerprint: fingerprint(cert.Raw),
+			SubjectHash: fingerprint(cert.RawSubject),
+			IssuerHash:  fingerprint(cert.RawIssuer),
+			Expired:     int(cert.NotAfter.Sub(time.Now()).Seconds()),
 		})
 		if err := CheckCertificate(cert, sni); err != nil {
 			st.Valid = InvalidState
@@ -141,4 +144,15 @@ func (mon Monitor) UpdateState(st *DBStateRow) {
 		}
 		sni = ""
 	}
+}
+
+func (mon Monitor) MaintainDB() {
+	// Delete unused certificates
+	mon.DB.DeleteCertificateBy(`
+		NOT EXISTS (SELECT 1 FROM state_certs sc WHERE c.fingerprint = sc.fingerprint)
+	`)
+	// Delete undiscoverable more
+	mon.DB.DeleteStateBy(`
+		type=1 AND CAST(julianday('now') - julianday(last_discovery) AS integer) >= 1
+	`)
 }
