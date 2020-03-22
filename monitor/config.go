@@ -12,12 +12,11 @@ import (
 //	Name - zone name
 //	Proto - protocol (tcp/udp)
 type ZoneConfig struct {
-	Master   string   `json:"master"`
-	Name     string   `json:"name"`
-	Proto    string   `json:"proto,omitempty"`
-	OmitMx   bool     `json:"omitMX"`
-	PortMX   int      `json:"portMX"`
-	Excludes []string `json:"excludes"`
+	Master string `json:"master"`
+	Name   string `json:"name"`
+	Proto  string `json:"proto,omitempty"`
+	OmitMX bool   `json:"omitMX"`
+	PortMX int    `json:"portMX"`
 }
 
 // Config represents application configuration

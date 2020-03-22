@@ -21,7 +21,7 @@ func (mon Monitor) discoveryZones() {
 					SNI:  name,
 					Type: DiscoveryState,
 				})
-			} else if !zone.OmitMx && hdr.Rrtype == dns.TypeMX {
+			} else if !zone.OmitMX && hdr.Rrtype == dns.TypeMX {
 				mx := v.(*dns.MX)
 				name := mx.Mx[:len(mx.Mx)-1]
 				mon.DB.InsertState(DBStateRow{
